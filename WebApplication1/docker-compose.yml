@@ -7,6 +7,7 @@ services:
       - "8080:8080"
     environment:
       ConnectionStrings__Default: "Host=db;Port=5432;Database=mydatabase;Username=postgres;Password=${DB_PASSWORD}"
+      Redis__ConnectionString: "${REDIS_CONNECTION_STRING}"
     depends_on:
       db:
         condition: service_healthy
@@ -25,5 +26,11 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
 volumes:
   pgdata:
+
