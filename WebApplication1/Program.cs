@@ -2,6 +2,8 @@ using Npgsql;
 using System.Security.Cryptography;
 using System.Xml.Linq;
 using WebApplication1;
+using StackExchange.Redis;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +14,12 @@ var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? throw new InvalidOperationException("ConnectionStrings:Default не задана");
 
 builder.Services.AddNpgsqlDataSource(connectionString);
+
+var redisConnection =
+    builder.Configuration["Redis:ConnectionString"]
+    ?? throw new InvalidOperationException("Redis:ConnectionString не задан");
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect(redisConnection));
 
 var app = builder.Build();
 
@@ -41,24 +49,67 @@ for (var attempt = 1; ; attempt++)
     }
 }
 
-app.MapGet("/bookstore/books/all", async (NpgsqlDataSource db) =>  {
-try
+app.MapGet("/bookstore/books/all", async (NpgsqlDataSource db, IConnectionMultiplexer redis) =>
 {
-        await using var cmd = db.CreateCommand("SELECT name, price, author FROM books");
-        await using var reader = await cmd.ExecuteReaderAsync();
-        List<Book> a = new List<Book>();
-        while (await reader.ReadAsync())
-        {
-            var bookName = reader.GetString(reader.GetOrdinal("name"));
-            var bookPrice = reader.GetInt32(reader.GetOrdinal("price"));
-            var bookAuthor = reader.GetString(reader.GetOrdinal("author"));
-            a.Add(new(bookName, bookPrice, bookAuthor));
-        }
-    return Results.Ok(a);
-}
-catch (Exception ex) 
+    try
     {
-        return Results.Problem(Convert.ToString(ex));
+        var cache = redis.GetDatabase();
+
+        var rows = new List<(int Id, int Price, string Author)>();
+
+        await using (var cmd = db.CreateCommand(
+            "SELECT id, price, author FROM books"))
+        await using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                rows.Add((
+                    reader.GetInt32(reader.GetOrdinal("id")),
+                    reader.GetInt32(reader.GetOrdinal("price")),
+                    reader.GetString(reader.GetOrdinal("author"))
+                ));
+            }
+        }
+
+        var books = new List<Book>();
+
+        foreach (var row in rows)
+        {
+            var cacheKey = $"book:name:{row.Id}";
+            var cachedName = await cache.StringGetAsync(cacheKey);
+
+            string name;
+
+            if (cachedName.HasValue)
+            {
+                name = cachedName.ToString();
+            }
+            else
+            {
+                await using var nameCmd = db.CreateCommand("SELECT name FROM books WHERE id = $1");
+                nameCmd.Parameters.AddWithValue(row.Id);
+
+                var result = await nameCmd.ExecuteScalarAsync();
+
+                if (result is not string dbName)
+                    continue;
+
+                name = dbName;
+
+                await cache.StringSetAsync(
+                    cacheKey,
+                    name,
+                    expiry: TimeSpan.FromMinutes(5));
+            }
+
+            books.Add(new Book(name, row.Price, row.Author));
+        }
+
+        return Results.Ok(books);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex);
     }
 });
 app.MapGet("/bookstore/books/search/name/{name}", async (string name, NpgsqlDataSource db) =>
@@ -202,5 +253,6 @@ try
     }
 });
 app.Run();
+
 
 
