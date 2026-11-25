@@ -112,76 +112,162 @@ app.MapGet("/bookstore/books/all", async (NpgsqlDataSource db, IConnectionMultip
         return Results.BadRequest(ex);
     }
 });
-app.MapGet("/bookstore/books/search/name/{name}", async (string name, NpgsqlDataSource db) =>
+app.MapGet("/bookstore/books/search/name/{name}", async (string name, NpgsqlDataSource db, IConnectionMultiplexer redis ) =>
 {
     try
     {
-        await using var cmd = db.CreateCommand("SELECT name, price, author FROM books WHERE name = $1");
+        var cache = redis.GetDatabase();
+        var rows = new List<(int Id, int Price, string Author)>();
+        await using var cmd = db.CreateCommand("SELECT id, price, author FROM books WHERE name = $1");
         cmd.Parameters.AddWithValue(name);
         await using var reader = await cmd.ExecuteReaderAsync();
-        List<Book> a = new List<Book>();
         while (await reader.ReadAsync())
         {
-            var bookName = reader.GetString(reader.GetOrdinal("name"));
-            var bookPrice = reader.GetInt32(reader.GetOrdinal("price"));
-            var bookAuthor = reader.GetString(reader.GetOrdinal("author"));
-            a.Add(new(bookName, bookPrice, bookAuthor));
+            rows.Add(new(
+                reader.GetInt32(reader.GetOrdinal("id")),
+                reader.GetInt32(reader.GetOrdinal("price")),
+                reader.GetString(reader.GetOrdinal("author"))));
         }
-        if (a.Count == 0)
-            return Results.NotFound(new { message = $"книги с названием {name} нету" });
-        return Results.Ok(a);
-    }
-    catch(Exception ex) 
+        var a = new List<Book>();
+        foreach (var row in rows)
+        {
+            var cacheKey = $"book:name:{row.Id}";
+            var cachedName = await cache.StringGetAsync(cacheKey);
+            string redisName;
+            if (cachedName.HasValue)
+            {
+                redisName = cachedName.ToString();
+            }
+            else
+            {
+                await using var nameCmd = db.CreateCommand("SELECT name FROM books WHERE id = $1");
+                nameCmd.Parameters.AddWithValue(row.Id);
+
+                var result = await nameCmd.ExecuteScalarAsync();
+
+                if (result is not string dbName)
+                    continue;
+                redisName = dbName;
+                await cache.StringSetAsync(
+                    cacheKey,
+                    redisName,
+                    expiry: TimeSpan.FromMinutes(5));
+            }
+            a.Add(new(redisName, row.Price, row.Author));
+        }
+        if (a.Count > 0)
+            return Results.Ok(a);
+        else
+            return Results.NotFound(new { message = $"книги с таким названием нету"});
+    }catch(Exception ex)
     {
-        return Results.Problem(Convert.ToString(ex));
+        return Results.Problem(ex.ToString());
     }
 });
-app.MapGet("/bookstore/books/search/price/{price}", async (int price, NpgsqlDataSource db) =>
+app.MapGet("/bookstore/books/search/price/{price}", async (int price, NpgsqlDataSource db, IConnectionMultiplexer redis) =>
 {
     try
     {
-        await using var cmd = db.CreateCommand("SELECT name, price, author FROM books WHERE price = $1");
+        var cache = redis.GetDatabase();
+        var rows = new List<(int Id, int Price, string Author)>();
+        await using var cmd = db.CreateCommand("SELECT id, price, author FROM books WHERE price = $1");
         cmd.Parameters.AddWithValue(price);
         await using var reader = await cmd.ExecuteReaderAsync();
-        List<Book> a = new List<Book>();
         while (await reader.ReadAsync())
         {
-            var bookName = reader.GetString(reader.GetOrdinal("name"));
-            var bookPrice = reader.GetInt32(reader.GetOrdinal("price"));
-            var bookAuthor = reader.GetString(reader.GetOrdinal("author"));
-            a.Add(new(bookName, bookPrice, bookAuthor));
+            rows.Add(new(
+                reader.GetInt32(reader.GetOrdinal("id")),
+                reader.GetInt32(reader.GetOrdinal("price")),
+                reader.GetString(reader.GetOrdinal("author"))));
         }
-        if (a.Count == 0)
-            return Results.NotFound(new { message = $"книги с ценой {price} нету" });
-        return Results.Ok(a);
+        var a = new List<Book>();
+        foreach (var row in rows)
+        {
+            var cacheKey = $"book:name:{row.Id}";
+            var cachedName = await cache.StringGetAsync(cacheKey);
+            string redisName;
+            if (cachedName.HasValue)
+            {
+                redisName = cachedName.ToString();
+            }
+            else
+            {
+                await using var nameCmd = db.CreateCommand("SELECT name FROM books WHERE id = $1");
+                nameCmd.Parameters.AddWithValue(row.Id);
+
+                var result = await nameCmd.ExecuteScalarAsync();
+
+                if (result is not string dbName)
+                    continue;
+                redisName = dbName;
+                await cache.StringSetAsync(
+                    cacheKey,
+                    redisName,
+                    expiry: TimeSpan.FromMinutes(5));
+            }
+            a.Add(new(redisName, row.Price, row.Author));
+        }
+        if (a.Count > 0)
+            return Results.Ok(a);
+        else
+            return Results.NotFound(new { message = $"книги с такой ценой нету" });
     }
     catch (Exception ex)
     {
-        return Results.Problem(Convert.ToString(ex));
+        return Results.Problem(ex.ToString());
     }
 });
-app.MapGet("/bookstore/books/search/author/{author}",async (string author, NpgsqlDataSource db) =>
+app.MapGet("/bookstore/books/search/author/{author}",async (string author, NpgsqlDataSource db, IConnectionMultiplexer redis) =>
 {
     try
     {
-        await using var cmd = db.CreateCommand("SELECT name, price, author FROM books WHERE author = $1");
+        var cache = redis.GetDatabase();
+        var rows = new List<(int Id, int Price, string Author)>();
+        await using var cmd = db.CreateCommand("SELECT id, price, author FROM books WHERE author = $1");
         cmd.Parameters.AddWithValue(author);
         await using var reader = await cmd.ExecuteReaderAsync();
-        List<Book> a = new List<Book>();
         while (await reader.ReadAsync())
         {
-            var bookName = reader.GetString(reader.GetOrdinal("name"));
-            var bookPrice = reader.GetInt32(reader.GetOrdinal("price"));
-            var bookAuthor = reader.GetString(reader.GetOrdinal("author"));
-            a.Add(new(bookName, bookPrice, bookAuthor));
+            rows.Add(new(
+                reader.GetInt32(reader.GetOrdinal("id")),
+                reader.GetInt32(reader.GetOrdinal("price")),
+                reader.GetString(reader.GetOrdinal("author"))));
         }
-        if (a.Count == 0)
-            return Results.NotFound(new { message = $"книги с автором {author} нету" });
-        return Results.Ok(a);
+        var a = new List<Book>();
+        foreach (var row in rows)
+        {
+            var cacheKey = $"book:name:{row.Id}";
+            var cachedName = await cache.StringGetAsync(cacheKey);
+            string redisName;
+            if (cachedName.HasValue)
+            {
+                redisName = cachedName.ToString();
+            }
+            else
+            {
+                await using var nameCmd = db.CreateCommand("SELECT name FROM books WHERE id = $1");
+                nameCmd.Parameters.AddWithValue(row.Id);
+
+                var result = await nameCmd.ExecuteScalarAsync();
+
+                if (result is not string dbName)
+                    continue;
+                redisName = dbName;
+                await cache.StringSetAsync(
+                    cacheKey,
+                    redisName,
+                    expiry: TimeSpan.FromMinutes(5));
+            }
+            a.Add(new(redisName, row.Price, row.Author));
+        }
+        if (a.Count > 0)
+            return Results.Ok(a);
+        else
+            return Results.NotFound(new { message = $"книги с таким названием нету" });
     }
     catch (Exception ex)
     {
-        return Results.Problem(Convert.ToString(ex));
+        return Results.Problem(ex.ToString());
     }
 });
 app.MapPost("/bookstore/books/add", async (Book newBook, NpgsqlDataSource db) =>
@@ -222,7 +308,7 @@ app.MapDelete("/bookstore/books/delete/{name}", async (string name, NpgsqlDataSo
         return Results.NotFound(new { message = $"книги с названием {name} нету" });
     return Results.Ok(new { deleted = affected });
 });
-app.MapPut("/bookstore/books/change/{ID}", async (Book newBook, int ID, NpgsqlDataSource db) =>
+app.MapPut("/bookstore/books/change/{ID}", async (Book newBook, int ID, NpgsqlDataSource db, IConnectionMultiplexer redis) =>
 {
 var errors = new List<string>();
 if (string.IsNullOrWhiteSpace(newBook.Name))
@@ -236,12 +322,15 @@ if (errors.Count > 0)
     return Results.BadRequest(new { errors });
 try
 {
-    await using var cmd = db.CreateCommand("UPDATE Books SET name = $1, price = $2, author = $3 WHERE id = $4;");
+        var cache = redis.GetDatabase();
+        var cacheKey = $"book:name:{ID}";
+        await using var cmd = db.CreateCommand("UPDATE Books SET name = $1, price = $2, author = $3 WHERE id = $4;");
     cmd.Parameters.AddWithValue(newBook.Name);
     cmd.Parameters.AddWithValue(newBook.Price);
     cmd.Parameters.AddWithValue(newBook.Author);
     cmd.Parameters.AddWithValue(ID);
     int affected = await cmd.ExecuteNonQueryAsync();
+    await cache.StringSetAsync(cacheKey, newBook.Name,expiry:TimeSpan.FromMinutes(5));
     if (affected == 0)
         return Results.NotFound(new { message = $"книги с id {ID} нету" });
     return Results.Ok(newBook);
